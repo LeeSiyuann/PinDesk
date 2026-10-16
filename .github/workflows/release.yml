@@ -1,0 +1,177 @@
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing v-prefixed version tag on main (for example v0.1.0-alpha.1)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Publish as a prerelease (keep enabled until real-device acceptance is complete)'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate reviewed release source
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.validate.outputs.commit }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require existing version tag merged into main
+        id: validate
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo 'Release tag must be vMAJOR.MINOR.PATCH with an optional prerelease suffix.' >&2
+            exit 1
+          fi
+          release_commit="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor "$release_commit" refs/remotes/origin/main
+          printf 'commit=%s\n' "$release_commit" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Build release Windows ZIP
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Windows application
+        run: dotnet build apps/windows/PinDesk.Windows/PinDesk.Windows.csproj --configuration Release
+      - name: Run core behavioral tests
+        run: dotnet run --project tests/PinDesk.Core.Tests/PinDesk.Core.Tests.csproj --configuration Release
+      - name: Run native Windows integration tests
+        run: dotnet run --project tests/PinDesk.Windows.Integration/PinDesk.Windows.Integration.csproj --configuration Release
+      - name: Package self-contained Windows release
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: ./scripts/package-windows.ps1 -Version $env:RELEASE_VERSION
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: dist/PinDesk-windows-win-x64-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: Build release macOS ZIP
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - name: Record Apple build environment
+        run: |
+          sw_vers
+          uname -m
+          swift --version
+          xcodebuild -version
+      - name: Build macOS application
+        working-directory: apps/macos
+        run: swift build --configuration release
+      - name: Run macOS behavioral tests
+        working-directory: apps/macos
+        run: swift test --parallel
+      - name: Package unsigned macOS release
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: bash scripts/package-macos.sh "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: dist/PinDesk-macos-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish verified packages and checksums
+    needs: [validate, windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job can write to the repository. Build jobs never receive a write token.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Check tag and write SHA256SUMS
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_commit="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          test "$current_commit" = "$RELEASE_COMMIT"
+          cd release-assets
+          shopt -s nullglob
+          windows=(PinDesk-windows-win-x64-*.zip)
+          macos=(PinDesk-macos-*.zip)
+          test "${#windows[@]}" -eq 1
+          test "${#macos[@]}" -eq 1
+          sha256sum "${windows[@]}" "${macos[@]}" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'NOTES'
+          PinDesk preview packages for Windows and macOS.
+
+          - Windows: extract the ZIP and run PinDesk.Windows.exe. The .NET runtime is included.
+          - macOS: extract the ZIP and move PinDesk.app to Applications. This build is unsigned and is not notarized; macOS may block it. No Developer ID certificate is configured.
+          - macOS 15.2+ uses the system window picker to authorize the selected window for this capture session. Returning to a source window requests Accessibility permission when needed. macOS displays a live reference, not a change to the source application's window level.
+          - SHA256SUMS contains the SHA-256 digest of every release ZIP.
+          - CI proves compilation and automated checks only. Full-screen behavior, permissions, multi-display operation, sleep/wake and interactive input require the real-device acceptance checklist in specs/acceptance.md.
+          NOTES
+          args=(--repo "$GH_REPO" --verify-tag --target "$RELEASE_COMMIT" --title "PinDesk $RELEASE_TAG" --notes-file release-notes.md)
+          if [[ "$IS_PRERELEASE" == 'true' ]]; then
+            args+=(--prerelease)
+          fi
+          # Do not clobber an existing release or silently replace previously published binaries.
+          gh release create "$RELEASE_TAG" release-assets/*.zip release-assets/SHA256SUMS "${args[@]}"
