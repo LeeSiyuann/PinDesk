@@ -41,3 +41,33 @@ jobs:
           path: dist/PinDesk-windows-win-x64-*.zip
           if-no-files-found: error
           retention-days: 14
+
+  macos:
+    name: macOS build, tests and package
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Record Apple build environment
+        run: |
+          sw_vers
+          uname -m
+          swift --version
+          xcodebuild -version
+      - name: Build macOS application
+        working-directory: apps/macos
+        run: swift build --configuration release
+      - name: Run macOS behavioral tests
+        working-directory: apps/macos
+        run: swift test --parallel
+      - name: Package unsigned macOS application
+        run: bash scripts/package-macos.sh "0.1.0-ci.${{ github.run_number }}"
+      - name: Upload macOS package after successful checks
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-preview-${{ github.run_number }}
+          path: dist/PinDesk-macos-*.zip
+          if-no-files-found: error
+          retention-days: 14
