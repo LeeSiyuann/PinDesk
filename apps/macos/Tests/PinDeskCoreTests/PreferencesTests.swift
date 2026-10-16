@@ -37,7 +37,9 @@ final class PreferencesTests: XCTestCase {
     func testSavedPreferencesRoundTripAndInvalidSavedValuesStillFailValidation() throws {
         let preferences = PinDeskPreferences(shortcut: .init(letter: "K", modifiers: [.control, .shift]), framesPerSecond: 30)
         XCTAssertEqual(try JSONDecoder().decode(PinDeskPreferences.self, from: JSONEncoder().encode(preferences)), preferences)
-        let invalidJSON = #"{"shortcut":{"letter":"P","modifiers":{"rawValue":8}},"framesPerSecond":99}"#.data(using: .utf8)!
+        // RawRepresentable + Codable encodes this OptionSet as its single UInt8 value,
+        // not an object containing rawValue. Preserve that valid wire shape while corrupting only fps.
+        let invalidJSON = #"{"shortcut":{"letter":"P","modifiers":8},"framesPerSecond":99}"#.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(PinDeskPreferences.self, from: invalidJSON)
         XCTAssertThrowsError(try decoded.validate())
     }
