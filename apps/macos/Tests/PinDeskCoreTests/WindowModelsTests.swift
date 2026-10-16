@@ -35,6 +35,22 @@ final class WindowModelsTests: XCTestCase {
         XCTAssertEqual(WindowMatcher.uniqueMatch(source: identity(), candidates: [identity(x: 103)]), 0)
     }
 
+    func testPickerUpdatesForAnyExistingOrClosedStreamCannotCreateSession() {
+        XCTAssertFalse(PickerUpdatePolicy.shouldCreateSession(hasAssociatedStream: true, isShuttingDown: false))
+        XCTAssertFalse(PickerUpdatePolicy.shouldCreateSession(hasAssociatedStream: true, isShuttingDown: true))
+        XCTAssertFalse(PickerUpdatePolicy.shouldCreateSession(hasAssociatedStream: false, isShuttingDown: true))
+        XCTAssertTrue(PickerUpdatePolicy.shouldCreateSession(hasAssociatedStream: false, isShuttingDown: false))
+    }
+
+    func testReusedPIDAndMissingLaunchDateCannotMatchSourceProcess() {
+        let firstLaunch = Date(timeIntervalSince1970: 100)
+        let source = SourceProcessIdentity(processID: 42, launchDate: firstLaunch)
+        XCTAssertTrue(source.matches(processID: 42, launchDate: firstLaunch))
+        XCTAssertFalse(source.matches(processID: 42, launchDate: Date(timeIntervalSince1970: 200)))
+        XCTAssertFalse(source.matches(processID: 99, launchDate: firstLaunch))
+        XCTAssertFalse(source.matches(processID: 42, launchDate: nil))
+    }
+
     private func identity(pid: Int32 = 42, title: String = "Document", x: Double = 100) -> WindowIdentity {
         WindowIdentity(processID: pid, title: title,
                        bounds: WindowBounds(x: x, y: 100, width: 800, height: 600))

@@ -1,5 +1,27 @@
 import Foundation
 
+/// A PID alone may be reused after the selected application's process exits.
+public struct SourceProcessIdentity: Equatable, Sendable {
+    public let processID: Int32
+    public let launchDate: Date
+
+    public init(processID: Int32, launchDate: Date) {
+        self.processID = processID; self.launchDate = launchDate
+    }
+
+    public func matches(processID: Int32, launchDate: Date?) -> Bool {
+        self.processID == processID && launchDate == self.launchDate
+    }
+}
+
+public enum PickerUpdatePolicy {
+    /// Existing-stream updates include late notifications for streams a user has already closed.
+    /// Source changes are disabled, so only a genuinely new, unassociated selection may add a session.
+    public static func shouldCreateSession(hasAssociatedStream: Bool, isShuttingDown: Bool) -> Bool {
+        !hasAssociatedStream && !isShuttingDown
+    }
+}
+
 /// Pure model code stays independent of AppKit so the conservative matching policy is testable.
 public struct WindowBounds: Equatable, Sendable {
     public var x: Double

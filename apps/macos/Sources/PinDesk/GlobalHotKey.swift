@@ -24,7 +24,7 @@ final class GlobalHotKey {
             let object = Unmanaged<GlobalHotKey>.fromOpaque(context).takeUnretainedValue()
             var received = EventHotKeyID(signature: 0, id: 0)
             guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-                                    nil, UInt32(MemoryLayout<EventHotKeyID>.size), nil, &received) == noErr else {
+                                    nil, MemoryLayout<EventHotKeyID>.size, nil, &received) == noErr else {
                 return OSStatus(eventNotHandledErr)
             }
             // Saving settings briefly holds both registrations. Each handler must process only its own ID.

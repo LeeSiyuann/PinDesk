@@ -24,6 +24,7 @@ final class CaptureSession: ObservableObject, Identifiable {
     let id = UUID()
     let windowID: CGWindowID
     let source: SCWindow
+    private let sourceProcessIdentity: SourceProcessIdentity?
     let displayLayer = AVSampleBufferDisplayLayer()
     @Published private(set) var state: CaptureState = .starting
     @Published private(set) var message = "正在等待首帧…"
@@ -50,6 +51,12 @@ final class CaptureSession: ObservableObject, Identifiable {
 
     init(filter: SCContentFilter, window: SCWindow, frameRateProvider: @escaping @MainActor () -> Int) {
         self.filter = filter; self.source = window; self.windowID = window.windowID
+        if let processID = window.owningApplication?.processID,
+           let launchDate = NSRunningApplication(processIdentifier: processID)?.launchDate {
+            self.sourceProcessIdentity = SourceProcessIdentity(processID: processID, launchDate: launchDate)
+        } else {
+            self.sourceProcessIdentity = nil
+        }
         self.frameRateProvider = frameRateProvider
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
@@ -105,7 +112,7 @@ final class CaptureSession: ObservableObject, Identifiable {
         markClosed()
         await lifecycleTask?.value
         await detachAndStop()
-        displayLayer.flushAndRemoveImage()
+        await clearDisplayedImage()
     }
 
     private func startCapture() async {
@@ -116,7 +123,8 @@ final class CaptureSession: ObservableObject, Identifiable {
         state = .starting
         message = "正在连接所选窗口…"
         lastFrameDate = nil
-        displayLayer.flushAndRemoveImage()
+        await clearDisplayedImage()
+        guard token == generation, !closed else { isBusy = false; return }
 
         let dimensions = CaptureDimensions(pointWidth: filter.contentRect.width,
                                            pointHeight: filter.contentRect.height,
@@ -164,14 +172,25 @@ final class CaptureSession: ObservableObject, Identifiable {
         if let oldStream { try? await oldStream.stopCapture() }
     }
 
+    private func clearDisplayedImage() async {
+        // The renderer is the supported enqueue/flush API on macOS 14+. Wait for the flush
+        // completion before accepting a replacement stream's first frame.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: {
+                continuation.resume()
+            })
+        }
+    }
+
     private func render(_ sample: CMSampleBuffer, generation token: Int) {
         guard token == generation, !closed, state == .live || state == .starting else { return }
-        if displayLayer.status == .failed { displayLayer.flush() }
-        guard displayLayer.isReadyForMoreMediaData else { return }
+        let renderer = displayLayer.sampleBufferRenderer
+        if renderer.status == .failed { renderer.flush() }
+        guard renderer.isReadyForMoreMediaData else { return }
         // A reference view should show the newest image immediately, not build a playback timeline.
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as? [NSMutableDictionary],
            let first = attachments.first { first[kCMSampleAttachmentKey_DisplayImmediately] = true }
-        displayLayer.enqueue(sample)
+        renderer.enqueue(sample)
         lastFrameDate = Date()
         state = .live
         message = ""
@@ -198,7 +217,7 @@ final class CaptureSession: ObservableObject, Identifiable {
 
     func returnToSource() {
         guard !closed else { return }
-        switch SourceWindowActivator.activate(window: source) {
+        switch SourceWindowActivator.activate(window: source, processIdentity: sourceProcessIdentity) {
         case .success:
             sourceReturnMessage = ""
             isMirrorHidden = true
@@ -224,7 +243,7 @@ final class CaptureSession: ObservableObject, Identifiable {
                 guard let self, !self.closed, self.state == .interacting else { return }
                 // Check the focused AX window as well as the application so switching documents
                 // within the same application also restores the reference.
-                if SourceWindowActivator.isSourceFocused(window: self.source) != true {
+                if SourceWindowActivator.isSourceFocused(window: self.source, processIdentity: self.sourceProcessIdentity) != true {
                     self.restoreAfterSourceInteraction()
                     return
                 }
@@ -255,6 +274,15 @@ private final class FrameOutput: NSObject, SCStreamOutput {
 
     func invalidate() { lock.lock(); active = false; lock.unlock() }
 
+    private func isActive() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return active
+    }
+
+    private func finishPendingDelivery() {
+        lock.lock(); pending = false; lock.unlock()
+    }
+
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, CMSampleBufferIsValid(sampleBuffer), CMSampleBufferGetImageBuffer(sampleBuffer) != nil,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
@@ -266,9 +294,8 @@ private final class FrameOutput: NSObject, SCStreamOutput {
         lock.unlock()
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.lock.lock(); let active = self.active; self.lock.unlock()
-            if active { self.onSample(sampleBuffer) }
-            self.lock.lock(); self.pending = false; self.lock.unlock()
+            if self.isActive() { self.onSample(sampleBuffer) }
+            self.finishPendingDelivery()
         }
     }
 }

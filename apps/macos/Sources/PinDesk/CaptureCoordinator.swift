@@ -167,9 +167,10 @@ extension CaptureCoordinator: SCContentSharingPickerObserver {
     nonisolated func contentSharingPicker(_ picker: SCContentSharingPicker, didUpdateWith filter: SCContentFilter, for stream: SCStream?) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // The picker may send an update from Control Center for an existing stream.
-            // Its per-stream configuration disables source changes, so never create a duplicate here.
-            if let stream, self.sessions.contains(where: { $0.owns(stream) }) { return }
+            // Existing-stream notifications may arrive after the user has closed a session.
+            // Never reinterpret an unknown/old stream as a new selection and resurrect it.
+            guard PickerUpdatePolicy.shouldCreateSession(hasAssociatedStream: stream != nil,
+                                                         isShuttingDown: self.isShuttingDown) else { return }
             self.add(filter: filter)
         }
     }
