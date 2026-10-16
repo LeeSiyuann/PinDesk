@@ -156,7 +156,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
           IS_PRERELEASE: ${{ inputs.prerelease }}
         shell: bash
         run: |
@@ -170,7 +169,10 @@ jobs:
           - SHA256SUMS contains the SHA-256 digest of every release ZIP.
           - CI proves compilation and automated checks only. Full-screen behavior, permissions, multi-display operation, sleep/wake and interactive input require the real-device acceptance checklist in specs/acceptance.md.
           NOTES
-          args=(--repo "$GH_REPO" --verify-tag --target "$RELEASE_COMMIT" --title "PinDesk $RELEASE_TAG" --notes-file release-notes.md)
+          # The tag already exists and was verified above. Passing an older --target
+          # can request Workflows:write when main's workflow files have changed,
+          # even though GitHub ignores target_commitish for an existing tag.
+          args=(--repo "$GH_REPO" --verify-tag --title "PinDesk $RELEASE_TAG" --notes-file release-notes.md)
           if [[ "$IS_PRERELEASE" == 'true' ]]; then
             args+=(--prerelease)
           fi
