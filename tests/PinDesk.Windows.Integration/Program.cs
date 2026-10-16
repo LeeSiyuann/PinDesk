@@ -20,6 +20,17 @@ if (args.Length == 3 && args[0] == "--crash-pin")
     Environment.Exit(86);
     return 86;
 }
+if (args.Length != 0 && (args.Length != 2 || args[0] != "--watchdog-exe"))
+{
+    Console.Error.WriteLine("FAIL Usage: PinDesk.Windows.Integration [--watchdog-exe <built PinDesk.Windows.exe>]");
+    return 1;
+}
+var watchdogExecutable = args.Length == 2 ? Path.GetFullPath(args[1]) : FindWatchdogExecutable();
+if (!File.Exists(watchdogExecutable))
+{
+    Console.Error.WriteLine($"FAIL The actual WPF recovery helper is missing: {watchdogExecutable}. Build apps/windows/PinDesk.Windows in Release first, or pass --watchdog-exe.");
+    return 1;
+}
 
 var testDirectory = Path.Combine(Path.GetTempPath(), "pindesk-win32-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(testDirectory);
@@ -120,6 +131,60 @@ try
         Assert(!platform.Matches(identity));
         Assert(journal.Read().Entries.Count == 0);
     });
+    Check("The actual WPF watchdog recovers an owner that exited before helper startup", () =>
+    {
+        var crashJournalPath = Path.Combine(testDirectory, "watchdog-crash.json");
+        var crashJournal = new FileRecoveryJournal(crashJournalPath);
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot locate test executable.");
+        var crashStart = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            crashStart.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        crashStart.ArgumentList.Add("--crash-pin");
+        crashStart.ArgumentList.Add(((long)host.First).ToString(CultureInfo.InvariantCulture));
+        crashStart.ArgumentList.Add(crashJournalPath);
+        try
+        {
+            // Dispose the last process handle before starting the actual helper. Its PID may already
+            // be absent, which must continue recovery instead of aborting GetProcessById/StartTime.
+            using (var child = Process.Start(crashStart) ?? throw new InvalidOperationException("Cannot launch watchdog crash simulation child."))
+            {
+                Assert(child.WaitForExit(15000), "Watchdog crash simulation child did not exit.");
+                Assert(child.ExitCode == 86, $"Watchdog crash simulation failed with {child.ExitCode}.");
+            }
+            var entry = crashJournal.Read().Entries.Single();
+            Assert(platform.ReadWindow(host.First)?.IsTopmost == true, "Crash simulation did not leave its target topmost.");
+            Assert(!RecoveryService.IsProcessAlive(entry.OwnerProcessId, entry.OwnerProcessStartTimeUtcTicks), "The simulated owner must have exited before helper startup.");
+            var recoveryStart = new ProcessStartInfo(watchdogExecutable)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+            foreach (var argument in new[]
+            {
+                "--recover",
+                entry.OwnerProcessId.ToString(CultureInfo.InvariantCulture),
+                entry.OwnerProcessStartTimeUtcTicks.ToString(CultureInfo.InvariantCulture),
+                crashJournalPath,
+                "Local\\PinDesk.Integration." + Guid.NewGuid().ToString("N"),
+            }) recoveryStart.ArgumentList.Add(argument);
+            using var watchdog = Process.Start(recoveryStart) ?? throw new InvalidOperationException("Cannot launch the actual WPF recovery helper.");
+            if (!watchdog.WaitForExit(10000))
+            {
+                watchdog.Kill(entireProcessTree: true);
+                watchdog.WaitForExit(5000);
+                throw new InvalidOperationException("The actual WPF recovery helper did not exit within 10 seconds.");
+            }
+            Assert(watchdog.ExitCode == 0, $"The actual WPF recovery helper exited with {watchdog.ExitCode}.");
+            Assert(platform.ReadWindow(host.First)?.IsTopmost == false, "The actual WPF recovery helper did not restore the window.");
+            Assert(crashJournal.Read().Entries.Count == 0, "The actual WPF recovery helper did not clear its journal.");
+        }
+        finally
+        {
+            // A failed assertion must not leave a test window pinned on the user's desktop.
+            if (crashJournal.Read().Entries.Count > 0) new RecoveryService(platform, crashJournal).Recover();
+        }
+    });
     Console.WriteLine($"{checks}/{checks} real Win32 integration checks passed.");
     return 0;
 }
@@ -150,6 +215,18 @@ static void RawTopmost(nint handle, bool value)
 {
     if (!Win32.SetWindowPos(handle, value ? -1 : -2, 0, 0, 0, 0, 0x213))
         throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+}
+static string FindWatchdogExecutable()
+{
+    const string relativePath = "apps/windows/PinDesk.Windows/bin/Release/net10.0-windows/PinDesk.Windows.exe";
+    // Find the repository from the test binary as well as the caller's working directory, so
+    // dotnet run and invoking the compiled integration executable use the same production helper.
+    for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+    {
+        var candidate = Path.Combine(directory.FullName, relativePath);
+        if (File.Exists(candidate)) return candidate;
+    }
+    return Path.GetFullPath(relativePath);
 }
 
 sealed class TestWindowHost : IDisposable
