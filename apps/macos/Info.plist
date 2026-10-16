@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>PinDesk</string>
+    <key>CFBundleIdentifier</key><string>app.pindesk.desktop</string>
+    <key>CFBundleName</key><string>PinDesk</string>
+    <key>CFBundleDisplayName</key><string>PinDesk</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>15.2</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSScreenCaptureUsageDescription</key><string>PinDesk 将你选择的窗口显示为本机悬浮参考画面，不录制或上传。</string>
+    <key>NSAccessibilityUsageDescription</key><string>仅在点击“操作原窗口”时，定位并提升你已选择的源窗口。</string>
+</dict>
+</plist>
