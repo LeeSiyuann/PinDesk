@@ -1,0 +1,43 @@
+name: Build and test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows build, tests and package
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Windows application
+        run: dotnet build apps/windows/PinDesk.Windows/PinDesk.Windows.csproj --configuration Release
+      - name: Run core behavioral tests
+        run: dotnet run --project tests/PinDesk.Core.Tests/PinDesk.Core.Tests.csproj --configuration Release
+      - name: Run native Windows integration tests
+        run: dotnet run --project tests/PinDesk.Windows.Integration/PinDesk.Windows.Integration.csproj --configuration Release
+      - name: Package self-contained Windows application
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Version "0.1.0-ci.${{ github.run_number }}"
+      - name: Upload Windows package after successful checks
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-preview-${{ github.run_number }}
+          path: dist/PinDesk-windows-win-x64-*.zip
+          if-no-files-found: error
+          retention-days: 14

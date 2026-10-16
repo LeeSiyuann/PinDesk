@@ -2,7 +2,7 @@
 
 轻量窗口固定工具，支持 Windows 原窗口置顶与 macOS 实时参考悬浮。
 
-项目正在实现第一版。实际构建、测试范围和预览包限制会随功能 PR 更新；暂不宣称完成全部实机兼容性验收。
+项目提供原生客户端的开发预览。Windows 已通过本机编译、22 项核心测试、8 项真实 Win32 窗口集成测试和管理界面冒烟测试；完整应用兼容性与多显示器人工验收仍需按矩阵执行。Mac 源码将通过独立 PR 与构建记录交付。
 
 | 平台 | 目标能力 | 首版目标 |
 | --- | --- | --- |
@@ -15,6 +15,33 @@
 
 - [完整产品与技术方案](方案/PinDesk跨平台窗口固定工具完整方案.docx)
 - [协作与提交约定](CONTRIBUTING.md)
+
+## Windows 使用
+
+解压 Release 的整个 Windows ZIP，运行 `PinDesk.Windows.exe`，无需另装 .NET。预览版尚未做 Authenticode 签名。
+
+- 选中需要固定的普通应用窗口，按 `Ctrl + Alt + P` 固定或解除。
+- 双击托盘图标管理窗口；托盘菜单的“选择窗口固定”会打开管理列表。
+- “设置”可修改快捷键和边框显示。关闭管理窗口后工具继续在托盘运行，选择“退出”会还原本工具修改的窗口状态。
+- 保留目标原先已有的置顶状态；窗口自行取消置顶时不反复强制恢复。
+- 默认普通用户权限；系统安全界面、独占全屏、管理员窗口和其他置顶工具的并发操作不属于通用兼容承诺。
+
+恢复助手只在准备固定窗口时启动，等待主进程退出后尽力还原；不能保证系统同时终止所有进程时立即恢复。下次启动会重新检查恢复日志，身份不匹配的窗口不会被修改。
+
+## Windows 开发
+
+安装 .NET 10 SDK，在项目根目录执行：
+
+```powershell
+dotnet build apps/windows/PinDesk.Windows/PinDesk.Windows.csproj -c Release
+dotnet run --project tests/PinDesk.Core.Tests -c Release
+dotnet run --project tests/PinDesk.Windows.Integration -c Release
+dotnet run --project apps/windows/PinDesk.Windows -c Release
+```
+
+Win32 集成测试需要有窗口激活权限的桌面会话。它会创建临时测试窗口，不测试或修改现有用户窗口。测试不能执行时报告失败，不将其标为已通过。
+
+生成自包含 ZIP：`./scripts/package-windows.ps1 -Version 0.1.0-alpha.1`。
 
 ## 开发约定
 
