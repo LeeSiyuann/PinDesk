@@ -36,6 +36,8 @@ The resulting `PinDesk-macos-*.zip` contains a `PinDesk.app` bundle. The build a
 
 Only the final publication job receives `contents: write`. It does not run application source or package scripts. Build jobs retain `contents: read`. No custom third-party action receives a release token. Releases use the GitHub CLI already installed on hosted runners.
 
+The release command uses the already verified tag without `--target`. GitHub ignores `target_commitish` for an existing tag, but supplying an older commit whose workflow files differ from the default branch can still require `Workflows: write` and cause a 403 with `GITHUB_TOKEN`. Omitting the unused target keeps publication within `contents: write`; the existing-tag and commit checks above still determine the release source. See the [GitHub release API](https://docs.github.com/en/rest/releases/releases#create-a-release).
+
 On Windows, verify a downloaded file with `Get-FileHash -Algorithm SHA256 <zip>`. On macOS/Linux, place `SHA256SUMS` alongside both ZIPs and run `shasum -a 256 -c SHA256SUMS`.
 
 ## Signing and permission limits
